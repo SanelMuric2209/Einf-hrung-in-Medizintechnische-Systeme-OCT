@@ -7,3 +7,5 @@
 # Compiled binaries and MEX files
 *.mexw64
 *.slxc
+
+data/
