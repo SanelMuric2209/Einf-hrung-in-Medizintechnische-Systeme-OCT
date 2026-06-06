@@ -5,13 +5,18 @@ clear; close all; clc;
 sizeX = 250;
 sizeY = 250;
 sizeZ = 512;
-
 all_volumes = cell(5, 5);
-fprintf('Starte Ladevorgang für das 5x5 Grid...\n');
+
+% Define the path to your data folder
+data_dir = fullfile('data', '2_Circle_0001');
+
+fprintf('Starte Ladevorgang für das 5x5 Grid aus Ordner: %s...\n', data_dir);
 
 for r = 1:5
     for c = 1:5
-        filename = sprintf('Vol_circle_%d_%d.h5', r, c);
+        % Generate the full path including the folder and filename
+        filename = fullfile(data_dir, sprintf('Vol_circle_%d_%d.h5', r, c));
+        
         if exist(filename, 'file')
             fprintf('Lade Datei: %s...\n', filename);
             info = h5info(filename);
@@ -29,7 +34,6 @@ fprintf('Ladevorgang abgeschlossen.\n\n');
 % Speicher für globale X, Y und Z-Verschiebungen relativ zu (1,1)
 T_global = zeros(5, 5, 3); 
 T_global(1, 1, :) = [0, 0, 0]; % Anchor bei (1,1) ist [0, 0, 0]
-
 fprintf('Berechne globale Translationen für alle 25 Volumen...\n');
 
 for r = 1:5
@@ -106,6 +110,7 @@ for r = 1:5
         else
             tz_rel = 0; % Falls kein Überlapp
         end
+        
         % =========================================================
         % SCHRITT 3: Globale Koordinaten akkumulieren
         % =========================================================
@@ -154,7 +159,6 @@ R_canvas3D = imref3d([canvas_height, canvas_width, canvas_depth], ...
 
 %% 4. Volumen in den 3D-Raum projizieren und verschmelzen
 fprintf('Erstelle zusammengesetztes 3D-Volumen (kann etwas dauern)...\n');
-
 % TIPP: Um Arbeitsspeicher zu sparen, initialisieren wir als 'single'
 stitched_volume = zeros(canvas_height, canvas_width, canvas_depth, 'single'); 
 
@@ -181,7 +185,6 @@ for r = 1:5
 end
 fprintf('3D-Stitching abgeschlossen.\n\n');
 
-%%
-% Möglichkeit B: Echte 3D-Darstellung (Volume Rendering)
+%% Möglichkeit B: Echte 3D-Darstellung (Volume Rendering)
 figure('Name', 'Echte 3D Visualisierung');
 volumeViewer(stitched_volume);
