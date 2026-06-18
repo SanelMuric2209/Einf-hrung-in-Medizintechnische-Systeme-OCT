@@ -1,0 +1,458 @@
+classdef OCTapp < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        UIFigure                        matlab.ui.Figure
+        TabGroup                        matlab.ui.container.TabGroup
+        DatenRegistrierungTab           matlab.ui.container.Tab
+        StichingstartenButton           matlab.ui.control.Button
+        QualittLamp                     matlab.ui.control.Lamp
+        QualittLampLabel                matlab.ui.control.Label
+        RegistrierungsMethodeDropDown   matlab.ui.control.DropDown
+        RegistrierungsMethodeDropDownLabel  matlab.ui.control.Label
+        LoadFolderButton                matlab.ui.control.Button
+        PathEditField                   matlab.ui.control.EditField
+        Label                           matlab.ui.control.Label
+        AnalyseTab                      matlab.ui.container.Tab
+        SegmentierungButton             matlab.ui.control.Button
+        DistanzmessenButton             matlab.ui.control.Button
+        FilterDropDown                  matlab.ui.control.DropDown
+        FilterDropDownLabel             matlab.ui.control.Label
+        ScrollenSlider                  matlab.ui.control.Slider
+        ScrollenSliderLabel             matlab.ui.control.Label
+        UIAxes2                         matlab.ui.control.UIAxes
+        UIAxes                          matlab.ui.control.UIAxes
+        BefundberichtTab                matlab.ui.container.Tab
+        PDFgenerierenButton             matlab.ui.control.Button
+        Image                           matlab.ui.control.Image
+        rztlicheBemerkungTextArea       matlab.ui.control.TextArea
+        rztlicheBemerkungTextAreaLabel  matlab.ui.control.Label
+    end
+
+    
+   properties (Access = private)
+    GesamtVolumen % fertiges 5x5 Grid
+    GefiltertesVolumen % entrauschten Daten
+end
+    
+    methods (Access = private)
+        
+        function StitchingButtonPushed(app, event)
+    % Hole den Pfad, den der Arzt vorhin geladen hat
+    aktuellerOrdner = app.PathEditField.Value;
+    
+    % Jetzt kannst du deinen H5-Lade-Code von vorhin benutzen:
+    filename = fullfile(aktuellerOrdner, sprintf('Projekt_OCT_Test_Yunusemre', r, c));
+    
+    % 2. Fehlerregistrierung prüfen
+    if kanten_fehler_erkannt
+        app.StatusLamp.Color = 'red';
+        uialert(app.UIFigure, 'Warnung: Unsaubere Kante im Gewebe gefunden!', 'Qualitäts-Check');
+    else
+        app.StatusLamp.Color = 'green';
+    end
+    
+    % 3. Automatisch zum nächsten Tab wechseln
+    app.TabGroup.SelectedTab = app.AnalyseFilterTab; 
+end
+        
+        function MessenButtonPushed(app, event)
+    % Erlaubt eine Linie im Bild zu ziehen
+    h = drawline(app.UIAxes); 
+    pos = h.Position;
+    % Berechne den Abstand
+    diffPos = diff(pos);
+    pixelAbstand = sqrt(sum(diffPos.^2));
+    
+    % Ergebnis (Abstand) in einem Fenster anzeigen
+    uialert(app.UIFigure, ['Abstand: ', num2str(pixelAbstand), ' Pixel'], 'Messung');
+end
+    end
+    
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Code that executes after component creation
+        function startupFcn(app)
+            
+        end
+
+        % Button pushed function: LoadFolderButton
+        function LoadFolderButtonPushed(app, event)
+   
+            % 1. Öffne den Windows/Mac-Ordner-Auswahldialog
+            gewaehlterOrdner = uigetdir('', 'Bitte den OCT-Projektordner auswählen');
+            
+            % 2. Prüfen, ob der Benutzer abgebrochen hat
+            if isequal(gewaehlterOrdner, 0)
+                return; 
+            else
+                % 3. Den Pfad als Text in das Edit Field schreiben
+                % WICHTIG: Prüfe gleich im linken Component Browser, 
+                % ob dein Textfeld wirklich exakt "PathEditField" heißt!
+                app.PathEditField.Value = gewaehlterOrdner;
+            end
+            
+
+        end
+
+        % Button pushed function: StichingstartenButton
+        function StichingstartenButtonPushed(app, event)
+
+            % 1. Den Pfad aus dem GUI-Textfeld auslesen
+            data_dir = app.PathEditField.Value;
+            
+            if isempty(data_dir) || ~exist(data_dir, 'dir')
+                uialert(app.UIFigure, 'Bitte wählen Sie zuerst einen gültigen Ordner aus!', 'Ordner fehlt');
+                return;
+            end
+            
+            % 2. Daten sammeln (Dateien einlesen)
+            sizeX = 250; sizeY = 250; sizeZ = 512;
+            geladene_volumen = cell(5, 5);
+            
+            for r = 1:5
+                for c = 1:5
+                    filename = fullfile(data_dir, sprintf('Vol_city_%d_%d.h5', r, c));
+                    if exist(filename, 'file')
+                        info = h5info(filename);
+                        name = info.Datasets.Name;
+                        data = h5read(filename, ['/' name]);
+                        geladene_volumen{r, c} = reshape(data, sizeX, sizeY, sizeZ);
+                    end
+                end
+            end
+            
+            % 3. AUFRUF DEINER SEPARATEN DATEI
+            [fertiges_vol, verschiebungen] = registerAndStitchOCT(geladene_volumen);
+            
+            % 4. Ergebnisse in deinen ECHTEN App-Properties speichern (KORRIGIERT)
+            app.GesamtVolumen = double(fertiges_vol);
+            app.GefiltertesVolumen = app.GesamtVolumen; 
+            
+            % 5. Fehlerregistrierung / Qualitäts-Check (KORRIGIERT auf QualittLamp)
+            if max(abs(verschiebungen(:))) > 500  % Schwellenwert für Artefakte
+                app.QualittLamp.Color = 'red';
+            else
+                app.QualittLamp.Color = 'green';
+            end
+            
+            % =========================================================
+            % 6. VORBEREITUNG & INITIALER FILTER (Median als Standard)
+            % =========================================================
+            % Setze das Dropdown im Analyse-Tab direkt auf den empfohlenen Medianfilter
+            app.FilterDropDown.Value = 'median';
+            
+            % Wir filtern das Volumen direkt JETZT, BEVOR wir die Achsen zeichnen!
+            app.GefiltertesVolumen = applyPreprocessing(app.GesamtVolumen, 'median');
+            
+            % Slider-Limits basierend auf der gefilterten Matrix einstellen (Dimension 2 = Y)
+            [~, maxSlices, ~] = size(app.GefiltertesVolumen); 
+            app.ScrollenSlider.Limits = [1, maxSlices];
+            app.ScrollenSlider.Value = 1;
+            
+            % Ersten ECHTEN B-Scan (jetzt bereits gefiltert!) herausschneiden
+            ersteSchicht = 1;
+            bScan_initial = squeeze(app.GefiltertesVolumen(:, ersteSchicht, :))';
+            
+            imagesc(app.UIAxes, bScan_initial);
+            colormap(app.UIAxes, 'gray');
+            
+            % Achsen für den echten B-Scan medizinisch korrekt benennen
+            xlabel(app.UIAxes, 'X (Breite)');
+            ylabel(app.UIAxes, 'Z (Gewebetiefe)'); 
+            title(app.UIAxes, sprintf('B-Scan - %d (Gefiltert: median)', ersteSchicht));
+            
+            % =========================================================
+            % 7. INNENLIEGENDE 3D-ANSICHT (Direkt in UIAxes2)
+            % =========================================================
+            cla(app.UIAxes2); 
+            
+            schwellenwert = 100; 
+            % Berechnet die Isosurface nun ebenfalls auf Basis der sauberen, gefilterten Daten
+            [faces, vertices] = isosurface(app.GefiltertesVolumen, schwellenwert);
+            
+            patch(app.UIAxes2, 'Faces', faces, 'Vertices', vertices, ...
+                  'FaceColor', [0.2 0.5 0.8], 'EdgeColor', 'none');
+            
+            view(app.UIAxes2, 3);                
+            camlight(app.UIAxes2, 'headlight');   
+            lighting(app.UIAxes2, 'gouraud');     
+            grid(app.UIAxes2, 'on');              
+            
+            xlabel(app.UIAxes2, 'X (Breite)');
+            ylabel(app.UIAxes2, 'Y (Länge)');
+            zlabel(app.UIAxes2, 'Z (Gewebetiefe)');
+            title(app.UIAxes2, '3D-Rekonstruktion - Filter: median');
+            
+            % Automatisch zum Analyse-Tab wechseln
+            app.TabGroup.SelectedTab = app.AnalyseTab;
+        end
+
+        % Value changing function: ScrollenSlider
+        function ScrollenSliderValueChanging(app, event)
+           
+            % 1. Die aktuelle Position des Sliders auslesen
+            % 'event.Value' liefert uns die Zahl, an der der Zeiger gerade steht
+            aktuelleSchicht = round(event.Value); 
+            
+            % 2. Sicherheitshalber prüfen, ob überhaupt schon Daten geladen sind
+            if isempty(app.GefiltertesVolumen)
+                return;
+            end
+            
+            % =========================================================
+            % KORREKTUR: Jetzt schneiden wir den echten B-Scan heraus
+            % =========================================================
+            % 3. Den entsprechenden B-Scan (X-Z-Ebene) extrahieren
+            % Wir halten die Y-Dimension fest (aktuelleSchicht) und nutzen squeeze + transponieren
+            bScan = squeeze(app.GefiltertesVolumen(:, aktuelleSchicht, :))';
+            
+            % 4. Das Bild in den UIAxes aktualisieren
+            imagesc(app.UIAxes, bScan);
+            colormap(app.UIAxes, 'gray');
+            
+            % Achsen für den echten B-Scan medizinisch korrekt benennen
+            xlabel(app.UIAxes, 'X (Breite)');
+            ylabel(app.UIAxes, 'Z (Gewebetiefe)'); 
+
+            % Titel angepasst: Jetzt ist es ein echter B-Scan (Schnittbild in die Tiefe)
+            title(app.UIAxes, sprintf('B-Scan - %d (X-Z-Ebene)', aktuelleSchicht));
+        end
+
+        % Value changed function: FilterDropDown
+        function FilterDropDownValueChanged(app, event)
+            value = app.FilterDropDown.Value;
+
+            % 1. Den aktuell ausgewählten Filter-String auslesen ('none', 'median', etc.)
+            gewaehlterFilter = app.FilterDropDown.Value;
+            
+            % 2. Sicherheitshalber prüfen, ob überhaupt schon Daten gestitcht wurden
+            if isempty(app.GesamtVolumen)
+                uialert(app.UIFigure, 'Bitte laden und stitchen Sie zuerst die OCT-Daten!', 'Keine Daten');
+                return;
+            end
+            
+            % Lampe kurz auf Gelb, da das Filtern aller Schichten kurz dauern kann
+            app.QualittLamp.Color = 'yellow';
+            drawnow;
+            
+            % 3. Monas Filter-Funktion aufrufen
+            % Wir übergeben das ungefilterte GesamtVolumen und die Filter-Methode.
+            % Das Ergebnis speichern wir in der Variable für die Anzeige.
+            app.GefiltertesVolumen = applyPreprocessing(app.GesamtVolumen, gewaehlterFilter);
+            
+            % =========================================================
+            % KORREKTUR: Anzeige an Monas Filter-Dimension anpassen
+            % =========================================================
+            % 4. Die Anzeige des aktuellen 2D-B-Scans aktualisieren
+            aktuelleSchicht = round(app.ScrollenSlider.Value);
+            
+            % Wir extrahieren die Schicht exakt so, wie Mona sie intern filtert:
+            % Dimension 2 (Y) ist der Schicht-Index. Mit squeeze und ' bringen wir es ins richtige Format.
+            anzeige_slice = squeeze(app.GefiltertesVolumen(:, aktuelleSchicht, :))';
+            
+            imagesc(app.UIAxes, anzeige_slice);
+            colormap(app.UIAxes, 'gray');
+            title(app.UIAxes, sprintf('B-Scan - Schicht %d (Gefiltert: %s)', aktuelleSchicht, gewaehlterFilter));
+
+            % Achsen für den echten B-Scan medizinisch korrekt benennen
+            xlabel(app.UIAxes, 'X (Breite)');
+            ylabel(app.UIAxes, 'Z (Gewebetiefe)'); 
+
+            % 5. Die integrierte 3D-Ansicht (UIAxes2) ebenfalls aktualisieren
+            cla(app.UIAxes2);
+            schwellenwert = 100; % Kann je nach Filter angepasst werden
+            [faces, vertices] = isosurface(app.GefiltertesVolumen, schwellenwert);
+            
+            patch(app.UIAxes2, 'Faces', faces, 'Vertices', vertices, ...
+                  'FaceColor', [0.2 0.5 0.8], 'EdgeColor', 'none');
+            
+            view(app.UIAxes2, 3);
+            camlight(app.UIAxes2, 'headlight');
+            lighting(app.UIAxes2, 'gouraud');
+            grid(app.UIAxes2, 'on');
+            
+            xlabel(app.UIAxes2, 'X (Transversal)');
+            ylabel(app.UIAxes2, 'Y (Transversal)');
+            zlabel(app.UIAxes2, 'Z (Axial - Tiefe)');
+            title(app.UIAxes2, ['3D-Ansicht - Filter: ', gewaehlterFilter]);
+            
+            % Berechnung fertig -> Lampe wieder auf Grün
+            app.QualittLamp.Color = 'green';
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create UIFigure and hide until all components are created
+            app.UIFigure = uifigure('Visible', 'off');
+            app.UIFigure.Position = [100 100 640 480];
+            app.UIFigure.Name = 'MATLAB App';
+
+            % Create TabGroup
+            app.TabGroup = uitabgroup(app.UIFigure);
+            app.TabGroup.Position = [1 1 640 480];
+
+            % Create DatenRegistrierungTab
+            app.DatenRegistrierungTab = uitab(app.TabGroup);
+            app.DatenRegistrierungTab.Title = 'Daten & Registrierung';
+
+            % Create Label
+            app.Label = uilabel(app.DatenRegistrierungTab);
+            app.Label.HorizontalAlignment = 'right';
+            app.Label.Position = [27 403 33 22];
+            app.Label.Text = 'Datei';
+
+            % Create PathEditField
+            app.PathEditField = uieditfield(app.DatenRegistrierungTab, 'text');
+            app.PathEditField.Position = [75 403 495 22];
+
+            % Create LoadFolderButton
+            app.LoadFolderButton = uibutton(app.DatenRegistrierungTab, 'push');
+            app.LoadFolderButton.ButtonPushedFcn = createCallbackFcn(app, @LoadFolderButtonPushed, true);
+            app.LoadFolderButton.Position = [27 359 113 23];
+            app.LoadFolderButton.Text = 'OCT Ordner laden';
+
+            % Create RegistrierungsMethodeDropDownLabel
+            app.RegistrierungsMethodeDropDownLabel = uilabel(app.DatenRegistrierungTab);
+            app.RegistrierungsMethodeDropDownLabel.HorizontalAlignment = 'right';
+            app.RegistrierungsMethodeDropDownLabel.Position = [27 316 135 22];
+            app.RegistrierungsMethodeDropDownLabel.Text = 'Registrierungs-Methode';
+
+            % Create RegistrierungsMethodeDropDown
+            app.RegistrierungsMethodeDropDown = uidropdown(app.DatenRegistrierungTab);
+            app.RegistrierungsMethodeDropDown.Position = [177 316 100 22];
+
+            % Create QualittLampLabel
+            app.QualittLampLabel = uilabel(app.DatenRegistrierungTab);
+            app.QualittLampLabel.HorizontalAlignment = 'right';
+            app.QualittLampLabel.Position = [31 229 47 22];
+            app.QualittLampLabel.Text = 'Qualität';
+
+            % Create QualittLamp
+            app.QualittLamp = uilamp(app.DatenRegistrierungTab);
+            app.QualittLamp.Position = [93 229 20 20];
+            app.QualittLamp.Color = [0.902 0.902 0.902];
+
+            % Create StichingstartenButton
+            app.StichingstartenButton = uibutton(app.DatenRegistrierungTab, 'push');
+            app.StichingstartenButton.ButtonPushedFcn = createCallbackFcn(app, @StichingstartenButtonPushed, true);
+            app.StichingstartenButton.Position = [31 274 100 23];
+            app.StichingstartenButton.Text = 'Stiching starten';
+
+            % Create AnalyseTab
+            app.AnalyseTab = uitab(app.TabGroup);
+            app.AnalyseTab.Title = 'Analyse';
+
+            % Create UIAxes
+            app.UIAxes = uiaxes(app.AnalyseTab);
+            title(app.UIAxes, 'B-Scan')
+            xlabel(app.UIAxes, 'X')
+            ylabel(app.UIAxes, 'Y')
+            zlabel(app.UIAxes, 'Z')
+            app.UIAxes.Position = [27 246 282 179];
+
+            % Create UIAxes2
+            app.UIAxes2 = uiaxes(app.AnalyseTab);
+            title(app.UIAxes2, '3D Volume')
+            xlabel(app.UIAxes2, 'X')
+            ylabel(app.UIAxes2, 'Y')
+            zlabel(app.UIAxes2, 'Z')
+            app.UIAxes2.Position = [324 250 300 185];
+
+            % Create ScrollenSliderLabel
+            app.ScrollenSliderLabel = uilabel(app.AnalyseTab);
+            app.ScrollenSliderLabel.HorizontalAlignment = 'right';
+            app.ScrollenSliderLabel.Position = [48 197 48 22];
+            app.ScrollenSliderLabel.Text = 'Scrollen';
+
+            % Create ScrollenSlider
+            app.ScrollenSlider = uislider(app.AnalyseTab);
+            app.ScrollenSlider.ValueChangingFcn = createCallbackFcn(app, @ScrollenSliderValueChanging, true);
+            app.ScrollenSlider.Position = [118 206 150 3];
+
+            % Create FilterDropDownLabel
+            app.FilterDropDownLabel = uilabel(app.AnalyseTab);
+            app.FilterDropDownLabel.HorizontalAlignment = 'right';
+            app.FilterDropDownLabel.Position = [51 122 31 22];
+            app.FilterDropDownLabel.Text = 'Filter';
+
+            % Create FilterDropDown
+            app.FilterDropDown = uidropdown(app.AnalyseTab);
+            app.FilterDropDown.Items = {'none', 'median', 'gaussian', 'average'};
+            app.FilterDropDown.ValueChangedFcn = createCallbackFcn(app, @FilterDropDownValueChanged, true);
+            app.FilterDropDown.Position = [97 122 100 22];
+            app.FilterDropDown.Value = 'median';
+
+            % Create DistanzmessenButton
+            app.DistanzmessenButton = uibutton(app.AnalyseTab, 'push');
+            app.DistanzmessenButton.Position = [45 75 100 23];
+            app.DistanzmessenButton.Text = 'Distanz messen';
+
+            % Create SegmentierungButton
+            app.SegmentierungButton = uibutton(app.AnalyseTab, 'push');
+            app.SegmentierungButton.Position = [45 34 100 23];
+            app.SegmentierungButton.Text = 'Segmentierung';
+
+            % Create BefundberichtTab
+            app.BefundberichtTab = uitab(app.TabGroup);
+            app.BefundberichtTab.Title = 'Befundbericht';
+
+            % Create rztlicheBemerkungTextAreaLabel
+            app.rztlicheBemerkungTextAreaLabel = uilabel(app.BefundberichtTab);
+            app.rztlicheBemerkungTextAreaLabel.HorizontalAlignment = 'right';
+            app.rztlicheBemerkungTextAreaLabel.Position = [36 401 116 22];
+            app.rztlicheBemerkungTextAreaLabel.Text = 'Ärztliche Bemerkung';
+
+            % Create rztlicheBemerkungTextArea
+            app.rztlicheBemerkungTextArea = uitextarea(app.BefundberichtTab);
+            app.rztlicheBemerkungTextArea.Position = [167 365 431 60];
+
+            % Create Image
+            app.Image = uiimage(app.BefundberichtTab);
+            app.Image.Position = [44 56 265 271];
+
+            % Create PDFgenerierenButton
+            app.PDFgenerierenButton = uibutton(app.BefundberichtTab, 'push');
+            app.PDFgenerierenButton.Position = [343 75 100 23];
+            app.PDFgenerierenButton.Text = 'PDF generieren';
+
+            % Show the figure after all components are created
+            app.UIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = OCTapp
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.UIFigure)
+
+            % Execute the startup function
+            runStartupFcn(app, @startupFcn)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.UIFigure)
+        end
+    end
+end
